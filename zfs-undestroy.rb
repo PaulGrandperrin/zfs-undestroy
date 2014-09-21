@@ -2,6 +2,13 @@
 #require 'debugger'
 
 require 'nice-ffi'
+#require 'term/ansicolor'
+require 'awesome_print'
+
+#include Term::ANSIColor
+#class String
+#  include Term::ANSIColor
+#end
 
 # ------------------------- Configuration ---------------------------------
 
@@ -61,6 +68,45 @@ def roundup x, y
 	return ((((x) + ((y) - 1)) / (y)) * (y))
 end
 
+
+def print_title title
+	l=(80-2-2-title.size)/2
+	puts "#{"="*l}> #{title.capitalize} <#{"="*l}"#.bold
+end
+
+def ask question
+	puts question.capitalize#.red
+	#print yellow
+	r=STDIN.gets
+	#print reset
+	return r
+end
+
+def aps o
+	ap o.summary, options = {indent: 8}
+end
+
+def summary o
+	o.summary
+end
+
+class Hash
+	def summary
+		self.map{|k,v| [k, (v.methods.include? :summary) ? v.summary : v]}.to_h
+	end
+end
+
+class Array
+	def summary
+		self.map{|o| (o.methods.include? :summary) ? o.summary : o}
+	end
+end
+
+class FFI::Struct::InlineArray
+	def summary
+		self.map{|o| (o.methods.include? :summary) ? o.summary : o}
+	end
+end
 # ---------------------------- Natives libraries ---------------------------
 
 
@@ -120,8 +166,8 @@ end
 class Zio_cksum_t < NiceFFI::Struct
 	layout :zc_word,		[:uint64, 4]
 
-	def pretty i = 0
-		puts "#{" "*4*i}#{self[:zc_word].map{|w| w.to_s(16)}*' '}"
+	def summary
+		zc_word.map{|w| w.to_s(16)}*' '
 	end
 end
 
@@ -145,15 +191,17 @@ class Dva_t < NiceFFI::Struct
 	end
 
 	def get_gang
-		return self[:dva_word][1] & 0x8000000000000000
+		return self[:dva_word][1] & 0x8000000000000000 == 1 ? true : false
 	end
 
-	def pretty i = 0
-		puts "#{" "*4*i}vdev:           #{get_vdev}"
-		puts "#{" "*4*i}grid:           #{get_grid}" 
-		puts "#{" "*4*i}asize:          #{get_asize.to_human} - 0x#{get_asize.to_s(16)}"
-		puts "#{" "*4*i}gang:           #{get_gang}"  
-		puts "#{" "*4*i}offset:         #{get_offset.to_human} - 0x#{get_offset.to_s(16)}"
+	def summary
+		{
+			vdev: 	get_vdev,
+			grid: 	get_grid,
+			asize: 	"#{get_asize.to_human} - 0x#{get_asize.to_s(16)}",
+			gang: 	get_gang,
+			offset: "#{get_offset.to_human} - 0x#{get_offset.to_s(16)}"
+		}
 	end
 
 end
@@ -173,12 +221,16 @@ class Blkptr_t < NiceFFI::Struct
 			:blk_fill,		:uint64,
 			:blk_cksum,		Zio_cksum_t
 
+	def get_endian
+		return (self[:blk_prop] & 0x8000000000000000)>>63 == 0 ? :big_endian : :little_endian
+	end
+
 	def get_level
 		return (self[:blk_prop] & 0x7F00000000000000)>>56
 	end
 
 	def get_compression
-		return (self[:blk_prop] & 0x000000FF00000000)>>32
+		return [:inherit, :on, :off, :lzjb, :empty, :g1, :g2, :g3, :g4, :g5, :g6, :g7, :g8, :g9, :zle, :lz4][(self[:blk_prop] & 0x000000FF00000000)>>32]
 	end
 
 	def get_lsize
@@ -190,11 +242,11 @@ class Blkptr_t < NiceFFI::Struct
 	end
 
 	def get_type
-		return ((self[:blk_prop] & 0x00FF000000000000)>>48)
+		return [:NONE, :OBJECT_DIRECTORY, :OBJECT_ARRAY, :PACKED_NVLIST, :NVLIST_SIZE, :BPLIST, :BPLIST_HDR, :SPACE_MAP_HEADER, :SPACE_MAP, :INTENT_LOG, :DNODE, :OBJSET, :DSL_DATASET, :DSL_DATASET_CHILD_MAP, :OBJSET_SNAP_MAP, :DSL_PROPS, :DSL_OBJSET, :ZNODE, :ACL, :PLAIN_FILE_CONTENTS, :DIRECTORY_CONTENTS, :MASTER_NODE, :DELETE_QUEUE, :ZVOL, :ZVOL_PROP][((self[:blk_prop] & 0x00FF000000000000)>>48)]
 	end
 
 	def get_cksumt
-		return ((self[:blk_prop] & 0x0000FF0000000000)>>40)
+		return [:inherit, :on, :off, :label, :gang_header, :zilog, :fletcher2, :fletcher4, :sha256, :zilog2][((self[:blk_prop] & 0x0000FF0000000000)>>40)]
 	end
 
 	def get_fill
@@ -209,25 +261,23 @@ class Blkptr_t < NiceFFI::Struct
 		return self[:blk_birth]
 	end
 
-
-	def pretty i = 0
-		puts "#{" "*4*i} BLKPTR"
-		puts "#{" "*4*i}dvas:"
-		self[:blk_dva].each{|dva| dva.pretty (i + 1)}
-		puts "#{" "*4*i}compression:    #{%w{inherit on off lzjb empty g1 g2 g3 g4 g5 g6 g7 g8 g9 zle lz4}[get_compression]}"
-		puts "#{" "*4*i}lsize:          #{get_lsize} - 0x#{get_lsize.to_s(16)}"
-		puts "#{" "*4*i}psize:          #{get_psize} - 0x#{get_psize.to_s(16)}"
-		puts "#{" "*4*i}level:          #{get_level}"
-		puts "#{" "*4*i}fill:           #{get_fill}"
-		puts "#{" "*4*i}birth:          #{get_birth}L/#{(get_phys_birth == 0) ? get_birth : get_phys_birth}P"
-		puts "#{" "*4*i}cksumt:         #{%w{inherit on off label gang_header zilog fletcher2 fletcher4 sha-256 zilog2}[get_cksumt]}"
-		puts "#{" "*4*i}type:           #{%w{NONE OBJECT_DIRECTORY OBJECT_ARRAY PACKED_NVLIST NVLIST_SIZE BPLIST BPLIST_HDR SPACE_MAP_HEADER SPACE_MAP INTENT_LOG DNODE OBJSET DSL_DATASET DSL_DATASET_CHILD_MAP OBJSET_SNAP_MAP DSL_PROPS DSL_OBJSET ZNODE ACL PLAIN_FILE_CONTENTS DIRECTORY_CONTENTS MASTER_NODE DELETE_QUEUE ZVOL ZVOL_PROP}[get_type]}"
-		puts "#{" "*4*i}checksum:"
-		self[:blk_cksum].pretty (i+1)
+	def summary
+		{
+			dvas: blk_dva.summary,
+			endian: get_endian,
+			level: get_level,
+			type: get_type,
+			cksumt: get_cksumt,
+			compression: get_compression,
+			psize: "#{get_psize} - 0x#{get_psize.to_s(16)}",
+			lsize: "#{get_lsize} - 0x#{get_lsize.to_s(16)}",
+			birth: "#{get_birth}L/#{(get_phys_birth == 0) ? get_birth : get_phys_birth}P",
+			fill: get_fill,
+			checksum: blk_cksum.summary
+		}
 	end
 
 	def raidzMap offset, psize, unit_shift
-		puts "<<<<<<<<<<<<<<<<<<< #{offset}, #{psize}, #{unit_shift}"
 		b = offset >> unit_shift
 		s = psize >> unit_shift
 
@@ -318,13 +368,11 @@ class Blkptr_t < NiceFFI::Struct
 				rm[:skipstart] = 1
 			end
 		end
-		puts ">>>>>>>>>>>>>>>>>>> "+rm.to_s
 		return rm
 	end
 
 	def get_data check = true
-		self.pretty
-		assert {not @@read_cksum.include?(self[:blk_cksum][:zc_word].to_a)}
+		#assert {not @@read_cksum.include?(self[:blk_cksum][:zc_word].to_a)}
 		valid = false
 		voffset = nil # TODO remove
 		raidz_col = nil # TODO remove
@@ -384,10 +432,10 @@ class Blkptr_t < NiceFFI::Struct
 		@@read_cksum.push(self[:blk_cksum][:zc_word].to_a)
 
 		# decompress data if needed
-		if self.get_compression == 1 or self.get_compression == 3
+		if self.get_compression == :on or self.get_compression == :lzjb
 			data = Lzjb::decompress data, lsize
 			assert {data.size == lsize}
-		elsif self.get_compression != 2
+		elsif self.get_compression != :off
 			raise "Unimplemented decompressor"
 		end
 
@@ -407,6 +455,18 @@ class Uberblock_t < NiceFFI::Struct
 			:ub_timestamp,	:uint64,
 			:ub_rootbp,		Blkptr_t,
 			:ub_software_version, :uint64
+
+	def summary
+		{
+			magic: 		"0x"+ub_magic.to_s(16),
+			version: 	ub_version,
+			txg: 		ub_txg,
+			guid_sum: 	ub_guid_sum,
+			timestamp: 	Time.at(ub_timestamp),
+			rootbp: 	ub_rootbp.summary,
+			soft_version: ub_software_version
+		}
+	end
 end
 
 DNODE_SHIFT = 9
@@ -435,6 +495,27 @@ class Dnode_phys_t < NiceFFI::Struct
 
   			:dn_blkptrbonus,		[:char, [3*Blkptr_t.size, DN_MAX_BONUSLEN].max],
     		:dn_spill,				Blkptr_t
+
+    def summary
+    	{
+    		type:					dn_type,
+    		indblkshift:			dn_indblkshift,
+    		nlevels:				dn_nlevels,
+    		nblkptr:				dn_nblkptr,
+    		bonustype:				dn_bonustype,
+    		checksum:				dn_checksum,
+    		compress:				dn_compress,
+    		flags:					dn_flags,
+    		datablkszsec:			dn_datablkszsec,
+    		bonuslen:				dn_bonuslen,
+		  	
+		  	maxblkid:				dn_maxblkid,
+		  	used:					dn_used,
+  			
+  			#dn_blkptrbonus:			[:char, [3*Blkptr_t.size, DN_MAX_BONUSLEN].max],
+    		spill:					dn_spill.summary
+    	}
+    end
 
     def get_bonus
     	return self[:dn_blkptrbonus].to_ptr.read_bytes(DN_MAX_BONUSLEN)[Blkptr_t.size, DN_MAX_BONUSLEN - Blkptr_t.size]
@@ -468,7 +549,6 @@ class Dnode_phys_t < NiceFFI::Struct
 
     	return path.reverse
     end
-
 
     def get_data first_blkid, last_blkid
 
@@ -551,6 +631,17 @@ class Zil_header_t < NiceFFI::Struct
 			:zh_flags,			:uint64,
 			:zh_claim_lr_seq,	:uint64,
 			:zh_pad,			[:uint64, 3]
+
+	def summary
+		{
+			claim_txg:		zh_claim_txg,
+			replay_seq:		zh_replay_seq,
+			log:			zh_log.summary,
+			claim_blk_seq:	zh_claim_blk_seq,
+			flags:			zh_flags,
+			claim_lr_seq:	zh_claim_lr_seq
+		}
+	end
 end
 
 
@@ -563,6 +654,17 @@ class Objset_phys_t < NiceFFI::Struct
 			:os_pad,				[:char, OBJSET_PHYS_SIZE - Dnode_phys_t.size*3 - Zil_header_t.size - 8*2],
 			:os_userused_dnode,		Dnode_phys_t,
 			:os_groupused_dnode,	Dnode_phys_t
+
+	def summary
+		{
+			meta_dnode: 	os_meta_dnode.summary,
+			zil_header: 	os_zil_header.summary,
+			type: 			os_type,
+			flags: 			os_flags,
+			userused_dnode: "TO IMPLEMENT",
+			groupused_dnode: "TO IMPLEMENT"
+		}
+	end
 end
 
 
@@ -735,214 +837,208 @@ end
 
 # ------------------------------- Helpers ----------------------------------
 
-def printL0Uberblocks vdev
+def getLabelUberblocks vdevId, labelId
+	vdev = $pool[:vdevs][vdevId]
+	uberblocks = []
 	128.times do |i|
-		vdev.sysseek 1024*128+(1024*i)
-		uber = Uberblock_t.new (vdev.sysread Uberblock_t.size)
-		if uber[:ub_magic] == 12235020
-			puts "offset:  #{i}"
-			puts "version: #{uber[:ub_version]}"
-			puts "txg:     #{uber[:ub_txg]}"
-			puts "time:    #{Time.at(uber[:ub_timestamp]).to_s}"
-			puts "blk:     #{uber[:ub_rootbp].to_s}"
-			puts "soft_v:  #{uber[:ub_software_version]}"
-			puts
-		end
+		vdev[:fd].sysseek (labelId >= 2 ? vdev[:size] - 1024*512 : 0) + (labelId%2)*1024*256 + 1024*128+(1024*i)
+		u = Uberblock_t.new (vdev[:fd].sysread Uberblock_t.size)
+		uberblocks << u if u[:ub_magic] == 12235020
 	end
+	return uberblocks
 end
 
 # ----------------------------Main code-------------------------------------
 
 # Open vdevs
-
 $pool[:vdevs].each do |vdev|
 	vdev[:fd] = File.open vdev[:path], "r"
+	vdev[:size] = `blockdev --getsize64 #{vdev[:path]}`.to_i
 end
 
-
-# Get one uberblock block pointer
-
-vdev = $pool[:vdevs][0][:fd]
-if ARGV.size < 1
-	# Print uberblocks
-	printL0Uberblocks vdev
-	puts "Which Uberblock offset do you want?"
-	uberblock_offset = Integer(STDIN.gets)
-else
-	uberblock_offset = Integer(ARGV[0])
-end
-vdev.sysseek 1024*128+(1024*uberblock_offset)
-uberblock = Uberblock_t.new (vdev.sysread Uberblock_t.size)
-uberblock_bp = uberblock[:ub_rootbp]
-
-
-puts "reading Objset MOS"
-# Get first Objset containing the MOS
-#$dump = true
-objset = Objset_phys_t.new(uberblock_bp.get_data)
-#$dump = false
-puts "reading MOS"
-# Get the MOS
-mos_data = objset[:os_meta_dnode].get_data 0,objset[:os_meta_dnode][:dn_maxblkid]
-
-mos = Array.new
-
-
-(mos_data.size / 512).times do |i|
-	mos.push Dnode_phys_t.new mos_data[512*i, 512]
-end
-id=0
-puts "============> #{mos.size}"
-mos.each do |dnode|
-	if dnode[:dn_type] == 16
-		puts "=> #{id} <="
-		puts dnode.to_s 
-		dset = Dsl_dataset_phys_t.new(dnode.get_bonus)
-		puts dset.to_s
-		puts
-		puts
-	end
-	id+=1
-end
-
-exit 0
-#dir_dnode=mos[0x05]
-#dir = Dsl_dir_phys_t.new(dir_dnode.get_bonus)
-#puts dir.to_s
+## Get one uberblock block pointer
+#vdev = $pool[:vdevs][0][:fd]
+#if ARGV.size < 1
+#	# Print uberblocks
+#	print_title "uberblocks"
+#	ap getL0Uberblocks vdev
+#	uberblock_offset = Integer(ask "Which Uberblock offset do you want?")
+#else
+#	uberblock_offset = Integer(ARGV[0])
+#end
+#vdev.sysseek 1024*128+(1024*uberblock_offset)
+#uberblock = Uberblock_t.new (vdev.sysread Uberblock_t.size)
+#uberblock_bp = uberblock[:ub_rootbp]
+#
+#
+#puts "reading Objset MOS"
+## Get first Objset containing the MOS
+##$dump = true
+#objset = Objset_phys_t.new(uberblock_bp.get_data)
+##$dump = false
+#puts "reading MOS"
+## Get the MOS
+#mos_data = objset[:os_meta_dnode].get_data 0,objset[:os_meta_dnode][:dn_maxblkid]
+#
+#mos = Array.new
+#
+#
+#(mos_data.size / 512).times do |i|
+#	mos.push Dnode_phys_t.new mos_data[512*i, 512]
+#end
+#id=0
+#puts "============> #{mos.size}"
+#mos.each do |dnode|
+#	if dnode[:dn_type] == 16
+#		puts "=> #{id} <="
+#		puts dnode.to_s 
+#		dset = Dsl_dataset_phys_t.new(dnode.get_bonus)
+#		puts dset.to_s
+#		puts
+#		puts
+#	end
+#	id+=1
+#end
+#
 #exit 0
-
-
-mos.size.times do |i|
-	begin
-		dset_dnode = mos[i]
-		puts "dn_type #{dset_dnode[:dn_type]} i=#{i}"
-		if dset_dnode[:dn_type] == 16 #DMU_OT_DSL_DATASET
-			puts "====================================================================================================="
-			puts "====================================================================================================="
-			puts "====================================================================================================="
-			puts dset_dnode.to_s
-
-			#dset_dnode.get_blkptrs[2].pretty
-
-			
-			dset =Dsl_dataset_phys_t.new(dset_dnode.get_bonus)
-			puts dset.to_s
-			dset_dnode.get_blkptrs[2].pretty
-			
-
-
-			if dset[:ds_creation_txg] == 55107 
-
-
-
-				data = dset_dnode.get_blkptrs[2].get_data
-				obj = Objset_phys_t.new data
-				puts obj.to_s
-				puts obj[:os_meta_dnode].to_s
-				b = obj[:os_meta_dnode].get_blkptrs[0]
-				b.pretty
-				b = Blkptr_t.new b.get_data[0, Blkptr_t.size]
-				b.pretty
-				b = Blkptr_t.new b.get_data[0, Blkptr_t.size]
-				b.pretty
-				b = Blkptr_t.new b.get_data[0, Blkptr_t.size]
-				b.pretty
-				b = Blkptr_t.new b.get_data[0, Blkptr_t.size]
-				b.pretty
-				b = Blkptr_t.new b.get_data[0, Blkptr_t.size]
-				b.pretty
-				b = Blkptr_t.new b.get_data[0, Blkptr_t.size]
-				b.pretty
-				zpl = Dnode_phys_t.new b.get_data[512*1,Dnode_phys_t.size]
-				puts zpl.to_s
-			end
-			puts "-----------------------------------------------------------------------------------------------------"
-			puts "-----------------------------------------------------------------------------------------------------"
-			puts "-----------------------------------------------------------------------------------------------------"
-		end
-	rescue => e
-		puts e
-		puts e.backtrace
-	end
-end
-
-# 1  DMU_OT_OBJECT_DIRECTORY
-# 5  DMU_OT_BPOBJ,
-# 8  DMU_OT_SPACE_MAP,
-# 10 DMU_OT_DNODE
-# 11 DMU_OT_OBJSET
-# 12 DMU_OT_DSL_DIR
-# 13 DMU_OT_DSL_DIR_CHILD_MAP
-# 14 DMU_OT_DSL_DS_SNAP_MAP
-# 15 DMU_OT_DSL_PROPS
-# 16 DMU_OT_DSL_DATASET,
-# 17 DMU_OT_ZNODE
-# 18 
-# 19 DMU_OT_PLAIN_FILE_CONTENTS
-# 20 DMU_OT_DIRECTORY_CONTENTS
-# 21 DMU_OT_MASTER_NODE
-
-exit 0
-f=File.open("aaa","w")
-mos.each do |dnode| 
-	puts dnode.to_s
-	begin
-		if dnode[:dn_nlevels] != 0
-			data= dnode.get_data 0, dnode[:dn_maxblkid]
-			f.write data
-		end
-	rescue
-	end
-end
-
-object_directory = mos[1]
-puts object_directory.to_s
-
-puts "reading ZAP"
-zap_data = object_directory.get_data 0, object_directory[:dn_maxblkid]
-zap_type = Uint64.new zap_data[0,Uint64.size]
-
-case zap_type[:value]
-when ZBT_MICRO # microzap
-	zap = Mzap_phys_t.new zap_data[0,Mzap_phys_t.size]
-when ZBT_HEADER # fatzap
-	zap = Zap_phys_t.new zap_data
-else
-	raise "Unknown zap type"
-end
-
-leaf = (zap.get_leaf 0)
-puts leaf[:l_hdr].to_s
-
-
-entry = leaf.get_entry 0
-puts entry.to_s
-
-# OSEF root_dataset = 2
-
-root_dataset = mos[2]
-assert {root_dataset[:dn_type] == 12} #DMU_OT_DSL_DATASET 
-puts root_dataset.to_s
-
-dp_root_dir = Dsl_dir_phys_t.new(root_dataset.get_bonus[0,Dsl_dir_phys_t.size])
-puts dp_root_dir[:dd_child_dir_zapobj]
-
-temp = mos[dp_root_dir[:dd_child_dir_zapobj]]
-puts temp.to_s
-zap_data = temp.get_data 0, temp[:dn_maxblkid]
-zap_type = Uint64.new zap_data[0,Uint64.size]
-
-case zap_type[:value]
-when ZBT_MICRO # microzap
-	zap = Mzap_phys_t.new zap_data[0,Mzap_phys_t.size]
-when ZBT_HEADER # fatzap
-	zap = Zap_phys_t.new zap_data
-else
-	raise "Unknown zap type"
-end
-puts zap_data
-
-
-
-dp_mos_dir = mos[5]
-dp_origin_dir = mos[12]
+##dir_dnode=mos[0x05]
+##dir = Dsl_dir_phys_t.new(dir_dnode.get_bonus)
+##puts dir.to_s
+##exit 0
+#
+#
+#mos.size.times do |i|
+#	begin
+#		dset_dnode = mos[i]
+#		puts "dn_type #{dset_dnode[:dn_type]} i=#{i}"
+#		if dset_dnode[:dn_type] == 16 #DMU_OT_DSL_DATASET
+#			puts "====================================================================================================="
+#			puts "====================================================================================================="
+#			puts "====================================================================================================="
+#			puts dset_dnode.to_s
+#
+#			#dset_dnode.get_blkptrs[2].pretty
+#
+#			
+#			dset =Dsl_dataset_phys_t.new(dset_dnode.get_bonus)
+#			puts dset.to_s
+#			dset_dnode.get_blkptrs[2].pretty
+#			
+#
+#
+#			if dset[:ds_creation_txg] == 55107 
+#
+#
+#
+#				data = dset_dnode.get_blkptrs[2].get_data
+#				obj = Objset_phys_t.new data
+#				puts obj.to_s
+#				puts obj[:os_meta_dnode].to_s
+#				b = obj[:os_meta_dnode].get_blkptrs[0]
+#				b.pretty
+#				b = Blkptr_t.new b.get_data[0, Blkptr_t.size]
+#				b.pretty
+#				b = Blkptr_t.new b.get_data[0, Blkptr_t.size]
+#				b.pretty
+#				b = Blkptr_t.new b.get_data[0, Blkptr_t.size]
+#				b.pretty
+#				b = Blkptr_t.new b.get_data[0, Blkptr_t.size]
+#				b.pretty
+#				b = Blkptr_t.new b.get_data[0, Blkptr_t.size]
+#				b.pretty
+#				b = Blkptr_t.new b.get_data[0, Blkptr_t.size]
+#				b.pretty
+#				zpl = Dnode_phys_t.new b.get_data[512*1,Dnode_phys_t.size]
+#				puts zpl.to_s
+#			end
+#			puts "-----------------------------------------------------------------------------------------------------"
+#			puts "-----------------------------------------------------------------------------------------------------"
+#			puts "-----------------------------------------------------------------------------------------------------"
+#		end
+#	rescue => e
+#		puts e
+#		puts e.backtrace
+#	end
+#end
+#
+## 1  DMU_OT_OBJECT_DIRECTORY
+## 5  DMU_OT_BPOBJ,
+## 8  DMU_OT_SPACE_MAP,
+## 10 DMU_OT_DNODE
+## 11 DMU_OT_OBJSET
+## 12 DMU_OT_DSL_DIR
+## 13 DMU_OT_DSL_DIR_CHILD_MAP
+## 14 DMU_OT_DSL_DS_SNAP_MAP
+## 15 DMU_OT_DSL_PROPS
+## 16 DMU_OT_DSL_DATASET,
+## 17 DMU_OT_ZNODE
+## 18 
+## 19 DMU_OT_PLAIN_FILE_CONTENTS
+## 20 DMU_OT_DIRECTORY_CONTENTS
+## 21 DMU_OT_MASTER_NODE
+#
+#exit 0
+#f=File.open("aaa","w")
+#mos.each do |dnode| 
+#	puts dnode.to_s
+#	begin
+#		if dnode[:dn_nlevels] != 0
+#			data= dnode.get_data 0, dnode[:dn_maxblkid]
+#			f.write data
+#		end
+#	rescue
+#	end
+#end
+#
+#object_directory = mos[1]
+#puts object_directory.to_s
+#
+#puts "reading ZAP"
+#zap_data = object_directory.get_data 0, object_directory[:dn_maxblkid]
+#zap_type = Uint64.new zap_data[0,Uint64.size]
+#
+#case zap_type[:value]
+#when ZBT_MICRO # microzap
+#	zap = Mzap_phys_t.new zap_data[0,Mzap_phys_t.size]
+#when ZBT_HEADER # fatzap
+#	zap = Zap_phys_t.new zap_data
+#else
+#	raise "Unknown zap type"
+#end
+#
+#leaf = (zap.get_leaf 0)
+#puts leaf[:l_hdr].to_s
+#
+#
+#entry = leaf.get_entry 0
+#puts entry.to_s
+#
+## OSEF root_dataset = 2
+#
+#root_dataset = mos[2]
+#assert {root_dataset[:dn_type] == 12} #DMU_OT_DSL_DATASET 
+#puts root_dataset.to_s
+#
+#dp_root_dir = Dsl_dir_phys_t.new(root_dataset.get_bonus[0,Dsl_dir_phys_t.size])
+#puts dp_root_dir[:dd_child_dir_zapobj]
+#
+#temp = mos[dp_root_dir[:dd_child_dir_zapobj]]
+#puts temp.to_s
+#zap_data = temp.get_data 0, temp[:dn_maxblkid]
+#zap_type = Uint64.new zap_data[0,Uint64.size]
+#
+#case zap_type[:value]
+#when ZBT_MICRO # microzap
+#	zap = Mzap_phys_t.new zap_data[0,Mzap_phys_t.size]
+#when ZBT_HEADER # fatzap
+#	zap = Zap_phys_t.new zap_data
+#else
+#	raise "Unknown zap type"
+#end
+#puts zap_data
+#
+#
+#
+#dp_mos_dir = mos[5]
+#dp_origin_dir = mos[12]
+#
