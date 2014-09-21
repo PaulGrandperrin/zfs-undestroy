@@ -82,12 +82,16 @@ def ask question
 	return r
 end
 
-def aps o
-	ap o.summary, options = {indent: 8}
+def aps o, raw = false
+	ap o.summary, options = {indent: 8, raw: raw}
 end
 
 def summary o
-	o.summary
+	if o.methods.include? :summary
+		o.summary
+	else
+		o
+	end
 end
 
 class Hash
@@ -550,7 +554,7 @@ class Dnode_phys_t < NiceFFI::Struct
     	return path.reverse
     end
 
-    def get_data first_blkid, last_blkid
+    def get_data first_blkid=0, last_blkid=dn_maxblkid
 
     	max_blkid = self[:dn_maxblkid]
     	nlevels  = self[:dn_nlevels]
@@ -661,8 +665,8 @@ class Objset_phys_t < NiceFFI::Struct
 			zil_header: 	os_zil_header.summary,
 			type: 			os_type,
 			flags: 			os_flags,
-			userused_dnode: "TO IMPLEMENT",
-			groupused_dnode: "TO IMPLEMENT"
+			userused_dnode: os_userused_dnode.summary,
+			groupused_dnode: os_groupused_dnode.summary
 		}
 	end
 end
