@@ -1046,3 +1046,8 @@ end
 #dp_mos_dir = mos[5]
 #dp_origin_dir = mos[12]
 #
+
+if __FILE__ == $0
+	require 'pry'
+	binding.pry quiet: true
+end
