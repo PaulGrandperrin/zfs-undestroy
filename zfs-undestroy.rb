@@ -2,13 +2,13 @@
 #require 'debugger'
 
 require 'nice-ffi'
-#require 'term/ansicolor'
+require 'term/ansicolor'
 require 'awesome_print'
 
 #include Term::ANSIColor
-#class String
-#  include Term::ANSIColor
-#end
+class String
+  include Term::ANSIColor
+end
 
 # ------------------------- Configuration ---------------------------------
 
@@ -18,18 +18,10 @@ $dump = false
 # zdb -C -e tank
 $pool = {
 	:vdevs => [
-
-			   
-
 			   {:path => "/dev/vgbackupdisk1/disk1"},
 			   {:path => "/dev/vgbackup/disk2"},
 			   {:path => "/dev/vgbackup/disk3"},
 			   {:path => "/dev/vgbackup/disk4"},
-
-			   
-			   
-			   
-				
 			   ],
 	:dcols => 4, #number of disk
 	:nparity => 1, #number of parities
@@ -71,14 +63,12 @@ end
 
 def print_title title
 	l=(80-2-2-title.size)/2
-	puts "#{"="*l}> #{title.capitalize} <#{"="*l}"#.bold
+	puts "#{"="*l}> #{title.capitalize} <#{"="*l}".bold
 end
 
 def ask question
-	puts question.capitalize#.red
-	#print yellow
+	puts question.capitalize.red
 	r=STDIN.gets
-	#print reset
 	return r
 end
 
@@ -167,6 +157,72 @@ end
 
 # -------------------------- ZFS Structures --------------------------------
 
+TYPESTRINGS = [
+				:NONE,
+				# general:
+				:OBJECT_DIRECTORY,
+				:OBJECT_ARRAY,
+				:PACKED_NVLIST,
+				:PACKED_NVLIST_SIZE,
+				:BPOBJ,
+				:BPOBJ_HDR,
+				# spa:
+				:SPACE_MAP_HEADER,
+				:SPACE_MAP,
+				# zil:
+				:INTENT_LOG,
+				# dmu:
+				:DNODE,
+				:OBJSET,
+				# dsl:
+				:DSL_DIR,
+				:DSL_DIR_CHILD_MAP,
+				:DSL_DS_SNAP_MAP,
+				:DSL_PROPS,
+				:DSL_DATASET,
+				# zpl:
+				:ZNODE,
+				:OLDACL,
+				:PLAIN_FILE_CONTENTS,
+				:DIRECTORY_CONTENTS,
+				:MASTER_NODE,
+				:UNLINKED_SET,
+				# zvol:
+				:ZVOL,
+				:ZVOL_PROP,
+				# other; for testing only!
+				:PLAIN_OTHER,
+				:UINT64_OTHER,
+				:ZAP_OTHER,
+				# new object types:
+				:ERROR_LOG,
+				:SPA_HISTORY,
+				:SPA_HISTORY_OFFSETS,
+				:POOL_PROPS,
+				:DSL_PERMS,
+				:ACL,
+				:SYSACL,
+				:FUID,
+				:FUID_SIZE,
+				:NEXT_CLONES,
+				:SCAN_QUEUE,
+				:USERGROUP_USED,
+				:USERGROUP_QUOTA,
+				:USERREFS,
+				:DDT_ZAP,
+				:DDT_STATS,
+				:SA,
+				:SA_MASTER_NODE,
+				:SA_ATTR_REGISTRATION,
+				:SA_ATTR_LAYOUTS,
+				:SCAN_XLATE,
+				:DEDUP,
+				:DEADLIST,
+				:DEADLIST_HDR,
+				:DSL_CLONES,
+				:BPOBJ_SUBOBJ
+			]
+
 class Zio_cksum_t < NiceFFI::Struct
 	layout :zc_word,		[:uint64, 4]
 
@@ -246,7 +302,7 @@ class Blkptr_t < NiceFFI::Struct
 	end
 
 	def get_type
-		return [:NONE, :OBJECT_DIRECTORY, :OBJECT_ARRAY, :PACKED_NVLIST, :NVLIST_SIZE, :BPLIST, :BPLIST_HDR, :SPACE_MAP_HEADER, :SPACE_MAP, :INTENT_LOG, :DNODE, :OBJSET, :DSL_DATASET, :DSL_DATASET_CHILD_MAP, :OBJSET_SNAP_MAP, :DSL_PROPS, :DSL_OBJSET, :ZNODE, :ACL, :PLAIN_FILE_CONTENTS, :DIRECTORY_CONTENTS, :MASTER_NODE, :DELETE_QUEUE, :ZVOL, :ZVOL_PROP][((self[:blk_prop] & 0x00FF000000000000)>>48)]
+		return TYPESTRINGS[((self[:blk_prop] & 0x00FF000000000000)>>48)]
 	end
 
 	def get_cksumt
@@ -502,7 +558,7 @@ class Dnode_phys_t < NiceFFI::Struct
 
     def summary
     	{
-    		type:					dn_type,
+    		type:					get_type,
     		indblkshift:			dn_indblkshift,
     		nlevels:				dn_nlevels,
     		nblkptr:				dn_nblkptr,
@@ -519,6 +575,10 @@ class Dnode_phys_t < NiceFFI::Struct
   			#dn_blkptrbonus:			[:char, [3*Blkptr_t.size, DN_MAX_BONUSLEN].max],
     		spill:					dn_spill.summary
     	}
+    end
+
+    def get_type
+    	TYPESTRINGS[dn_type]
     end
 
     def get_bonus
@@ -858,6 +918,48 @@ end
 $pool[:vdevs].each do |vdev|
 	vdev[:fd] = File.open vdev[:path], "r"
 	vdev[:size] = `blockdev --getsize64 #{vdev[:path]}`.to_i
+end
+
+def main txg = nil
+
+	# Find all uberblocks
+	uberblocks={}
+	($pool[:vdevs].size-1).downto 0 do |vdev|
+		0.upto 3 do |i|
+			(getLabelUberblocks vdev, i).each do |u|
+				uberblocks[u[:ub_txg]] = u 
+			end
+		end
+	end
+
+	# Which one should we use
+	if txg.nil?
+		print_title "Available uberblocks txg by date"
+		uberblocks.values.sort_by{|u| u[:ub_txg]}.each do |u|
+			puts "#{u[:ub_txg]} - #{Time.at(u[:ub_timestamp])}"
+		end
+
+		begin
+			txg = (ask "Selected uberblock's txg?").to_i
+		end while not uberblocks.has_key? txg
+	end
+	uberblock = uberblocks[txg]
+
+	# Get the MOS
+	meta_dnode = (Objset_phys_t.new uberblock.ub_rootbp.get_data).os_meta_dnode
+	mos_raw = meta_dnode.get_data
+	mos = []
+	(mos_raw.size / 512).times do |offset|
+		mos <<  (Dnode_phys_t.new mos_raw[512*offset, 512])
+	end
+
+	# Print the MOS
+	mos.each_index do |i|
+		dnode = mos[i]
+		puts "#{i} - #{dnode.get_type}" if dnode.dn_type > 0 and dnode.dn_type < TYPESTRINGS.size
+	end
+
+	return
 end
 
 ## Get one uberblock block pointer
